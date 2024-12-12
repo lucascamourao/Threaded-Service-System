@@ -1,12 +1,12 @@
 # Sistema de Atendimento com Threads (C)
 
-Este projeto implementa um sistema com múltiplas threads em C que simula um processo de atendimento a clientes. O programa possui três threads principais: **Recepção**, **Atendimento**, e **Analista**. O sistema permite a criação de clientes com diferentes prioridades e os atende dentro de um tempo de paciência, enquanto registra as informações dos clientes atendidos em um arquivo.
+Este projeto implementa um sistema com múltiplas threads em C que simula um processo de atendimento a clientes. O programa possui três threads principais: **Recepção**, **Atendimento** e **Analista**. O sistema permite a criação de clientes com diferentes prioridades e os atende dentro de um tempo de paciência, enquanto registra as informações dos clientes atendidos em um arquivo.
 
-## Funcionalidade
+## Funcionalidades
 
 O sistema é dividido em três módulos principais:
 
-1. **Recepção**: 
+1. **Recepção**:
     - Cria clientes com duas prioridades possíveis: alta e baixa.
     - Insere os clientes em uma fila de atendimento.
     - A cada criação de cliente, a prioridade é atribuída aleatoriamente com 50% de chance de ser alta ou baixa.
@@ -47,9 +47,77 @@ O sistema termina quando todos os clientes forem atendidos (se N for um valor es
 - Quando o atendimento for concluído, o programa calcula e exibe a taxa de satisfação (clientes atendidos no tempo determinado).
 - O processo "Analista" imprime os primeiros 10 PIDs dos clientes atendidos a cada iteração e os apaga do arquivo.
 
-## Compilação e Execução
+## Instruções para Configuração e Execução
 
-1. **Compilar o código**:
-   Para compilar o programa, use o seguinte comando:
-   ```bash
-   gcc -o atendimento main.c analista.c recepcao.c atendente.c fila.c -lpthread
+### 1. Instalação do WSL
+Se você estiver usando o Windows, é necessário instalar o **WSL (Windows Subsystem for Linux)** para compilar e executar o programa:
+
+1. Abra o **PowerShell** como administrador e execute o seguinte comando:
+   ```powershell
+   wsl --install
+   ```
+   Isso instalará o WSL e a distribuição Ubuntu por padrão.
+
+2. Reinicie o computador se solicitado.
+
+3. Após reiniciar, abra o **Ubuntu** no menu Iniciar e siga as instruções para configurar um nome de usuário e senha.
+
+### 2. Instalar Dependências no WSL
+Certifique-se de que as ferramentas necessárias estão instaladas no WSL:
+
+```bash
+sudo apt update
+sudo apt install build-essential
+```
+
+### 3. Navegar até o Diretório do Projeto
+No WSL, navegue até o diretório onde os arquivos do projeto estão localizados. Por exemplo:
+
+```bash
+cd /mnt/c/Users/user/Desktop/TUDO/C_programming/SistemasOperacionais/SO
+```
+
+### 4. Compilar o Código
+Use o seguinte comando para compilar os arquivos:
+
+```bash
+gcc -pthread -o atendimento main.c analista.c recepcao.c atendente.c fila.c
+```
+
+Isso gerará um arquivo executável chamado `atendimento`.
+
+### 5. Executar o Programa
+Para executar o programa, use:
+
+```bash
+./atendimento
+```
+
+Se o programa aceitar argumentos, passe-os como no exemplo abaixo:
+
+```bash
+./atendimento 10 1000
+```
+
+### 6. Limpeza dos Arquivos
+Você pode usar o comando `rm` para remover os arquivos gerados, ou criar um **Makefile** para facilitar o processo. Consulte a seção de automação com `make` abaixo.
+
+## Automação com Makefile
+Se o projeto incluir um arquivo `Makefile`, você pode automatizar os passos de compilação e execução. Aqui estão os comandos mais comuns:
+
+- **Compilar todos os programas**:
+  ```bash
+  make
+  ```
+
+- **Limpar arquivos temporários e executáveis**:
+  ```bash
+  make clean
+  ```
+
+- **Executar o programa**:
+  ```bash
+  make run
+  ```
+
+Certifique-se de que o `Makefile` esteja configurado corretamente no mesmo diretório dos arquivos fonte.
