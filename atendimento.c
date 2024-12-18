@@ -47,9 +47,12 @@ sem_t *sem_atend = SEM_FAILED;
 sem_t *sem_block = SEM_FAILED;
 ListaCircular fila;
 int total_clientes = 0, clientes_satisfeitos = 0;
-struct timeval tempo_inicial;
+struct timeval tempo_inicial, tempo_atual;
 int flag_parar = 0;
 int contador_atendimentos = 0;
+
+struct timespec start_time, end_time;
+double elapsed_time;
 
 // Function prototypes
 void initLista(ListaCircular *lista);
@@ -144,8 +147,10 @@ void handle_signal(int sig)
 void *thread_menu(void *arg)
 {
     char ch;
+    printf("Pressione 's' para encerrar o programa.\n");
     while ((ch = getchar()) != 's')
         ;
+    printf("Encerrando o programa...\n");
     flag_parar = 1;
     return NULL;
 }
@@ -243,7 +248,9 @@ void *thread_recepcao(void *arg)
 
         enqueue(&fila, novo_cliente);
         total_clientes++;
+
         printf("Cliente gerado. PID: %d\n", pid);
+
         printf("[DEBUG] Fila - tamanho: %d\n", fila.size);
 
         sem_post(sem_block);
@@ -313,16 +320,22 @@ void *thread_atendente(void *arg)
         int paciencia = (cliente.prioridade == 1) ? (X / 2) : X;
 
         if (tempo_espera <= paciencia)
+        {
             clientes_satisfeitos++;
+        }
 
         printf("Atendendo cliente. PID: %d, Prioridade: %d\n", cliente.pid, cliente.prioridade);
 
         FILE *lng = fopen("lista_numeros_gerados.txt", "a");
-        if (lng)
+        if (lng && tempo_espera <= paciencia)
         {
-            fprintf(lng, "%d\n", cliente.pid);
-            fclose(lng);
+            fprintf(lng, "%d - Satisfeito\n", cliente.pid);
         }
+        else
+        {
+            fprintf(lng, "%d - Insatisfeito\n", cliente.pid);
+        }
+        fclose(lng);
 
         sem_post(sem_atend);
 
@@ -336,6 +349,7 @@ void *thread_atendente(void *arg)
 // Main function
 int main(int argc, char *argv[])
 {
+    double elapsed_time = 0;
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
@@ -352,30 +366,43 @@ int main(int argc, char *argv[])
 
     int N = atoi(argv[1]);
     int X = atoi(argv[2]);
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
 
-    sem_atend = sem_open("/sem_atend", O_CREAT | O_EXCL, 0644, 1);
-    sem_block = sem_open("/sem_block", O_CREAT | O_EXCL, 0644, 1);
-    if (sem_atend == SEM_FAILED || sem_block == SEM_FAILED)
+    while (!flag_parar && elapsed_time < 5)
     {
-        perror("Falha ao criar semáforos");
-        return 1;
+        sem_atend = sem_open("/sem_atend", O_CREAT | O_EXCL, 0644, 1);
+        sem_block = sem_open("/sem_block", O_CREAT | O_EXCL, 0644, 1);
+        if (sem_atend == SEM_FAILED || sem_block == SEM_FAILED)
+        {
+            perror("Falha ao criar semáforos");
+            return 1;
+        }
+
+        initLista(&fila);
+
+        pthread_t thread_rec, thread_atend, thread_menu_t;
+        pthread_create(&thread_rec, NULL, thread_recepcao, &N);
+        pthread_create(&thread_atend, NULL, thread_atendente, &X);
+        pthread_create(&thread_menu_t, NULL, thread_menu, NULL);
+
+        pthread_join(thread_rec, NULL);
+        pthread_join(thread_atend, NULL);
+        pthread_join(thread_menu_t, NULL);
+
+        safe_sem_close(&sem_atend, "/sem_atend");
+        safe_sem_close(&sem_block, "/sem_block");
+
+        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        elapsed_time = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
+
+        if ((contador_atendimentos == total_clientes) || (elapsed_time) > 5.0)
+        {
+            flag_parar = 1;
+            break;
+        }
     }
 
-    initLista(&fila);
-    gettimeofday(&tempo_inicial, NULL);
-
-    pthread_t thread_rec, thread_atend, thread_menu_t;
-    pthread_create(&thread_rec, NULL, thread_recepcao, &N);
-    pthread_create(&thread_atend, NULL, thread_atendente, &X);
-    pthread_create(&thread_menu_t, NULL, thread_menu, NULL);
-
-    pthread_join(thread_rec, NULL);
-    pthread_join(thread_atend, NULL);
-    pthread_join(thread_menu_t, NULL);
-
-    safe_sem_close(&sem_atend, "/sem_atend");
-    safe_sem_close(&sem_block, "/sem_block");
-
     printf("Programa finalizado. Clientes satisfeitos: %d/%d\n", clientes_satisfeitos, total_clientes);
+    printf("Tempo de execução: %f segundos\n", elapsed_time);
     return 0;
 }

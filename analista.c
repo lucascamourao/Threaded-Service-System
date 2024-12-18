@@ -39,10 +39,13 @@ int main()
     int pid;
     printf("Analista imprimindo PIDs:\n");
 
+    // rewind(lng); colocar o ponteiro do arquivo no início?
+    char linha[256]; // Buffer para armazenar cada linha do arquivo
+
     // Print first 10 PIDs or all if less than 10
-    while (count < 10 && fscanf(lng, "%d", &pid) == 1)
+    while (count < 10 && fgets(linha, sizeof(linha), lng))
     {
-        printf("PID %d\n", pid);
+        printf("PID: %s", linha); // Imprime a linha
         count++;
     }
 
