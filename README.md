@@ -99,6 +99,8 @@ Se o programa aceitar argumentos, passe-os como no exemplo abaixo:
 ./atendimento 10 1000
 ```
 
+Se preferir, adicione um terminal Ubuntu (WSL) no próprio VS Code do Windows.
+
 ### 6. Limpeza dos Arquivos
 Você pode usar o comando `rm` para remover os arquivos gerados, ou criar um **Makefile** para facilitar o processo. Consulte a seção de automação com `make` abaixo.
 
