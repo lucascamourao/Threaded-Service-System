@@ -27,7 +27,7 @@ typedef struct
     pid_t pid;
     int hora_chegada;
     int prioridade;
-    int tempo_atendimento;
+    float tempo_atendimento; // era inteiro
 } Cliente;
 
 typedef struct Node
@@ -51,7 +51,7 @@ struct timeval tempo_inicial, tempo_atual;
 int flag_parar = 0;
 int contador_atendimentos = 0;
 
-struct timespec start_time, end_time;
+struct timespec START_TIME, end_time;
 double elapsed_time;
 
 // Function prototypes
@@ -235,10 +235,11 @@ void *thread_recepcao(void *arg)
         }
         fclose(demanda);
 
-        struct timeval current;
-        gettimeofday(&current, NULL);
-        int hora_chegada = (current.tv_sec - tempo_inicial.tv_sec) * 1000 +
-                           (current.tv_usec - tempo_inicial.tv_usec) / 1000;
+        // struct timeval current;
+        // gettimeofday(&current, NULL);
+        //  int hora_chegada = (current.tv_sec - tempo_inicial.tv_sec) * 1000 + (current.tv_usec - tempo_inicial.tv_usec) / 1000;
+        clock_gettime(CLOCK_MONOTONIC, &current);
+        float hora_chegada = START_TIME - current;
 
         Cliente novo_cliente = {
             .pid = pid,
@@ -312,8 +313,9 @@ void *thread_atendente(void *arg)
         }
 
         gettimeofday(&current, NULL);
-        int tempo_espera = (current.tv_sec - tempo_inicial.tv_sec) * 1000 +
-                           (current.tv_usec - tempo_inicial.tv_usec) / 1000 - cliente.hora_chegada;
+        // float tempo_espera = (current.tv_sec - tempo_inicial.tv_sec) * 1000 + (current.tv_usec - tempo_inicial.tv_usec) / 1000 - cliente.hora_chegada;
+        clock_gettime(CLOCK_MONOTONIC, &current);
+        float tempo_espera = cliente.hora_chegada - current;
 
         int paciencia = (cliente.prioridade == 1) ? (X / 2) : X;
 
@@ -327,7 +329,7 @@ void *thread_atendente(void *arg)
         FILE *lng = fopen("lista_numeros_gerados.txt", "a");
         if (lng && tempo_espera <= paciencia)
         {
-            fprintf(lng, "%d - Satisfeito\n", cliente.pid);
+            fprintf(lng, "%d - Satisfeito - Tempo de atendimento: %f\n", cliente.pid, cliente.tempo_atendimento);
         }
         else
         {
@@ -364,7 +366,7 @@ int main(int argc, char *argv[])
 
     int N = atoi(argv[1]);
     int X = atoi(argv[2]);
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    clock_gettime(CLOCK_MONOTONIC, &START_TIME);
 
     while (!flag_parar && elapsed_time < 5)
     {
@@ -391,7 +393,7 @@ int main(int argc, char *argv[])
         safe_sem_close(&sem_block, "/sem_block");
 
         clock_gettime(CLOCK_MONOTONIC, &end_time);
-        elapsed_time = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
+        elapsed_time = (end_time.tv_sec - START_TIME.tv_sec) + (end_time.tv_nsec - START_TIME.tv_nsec) / 1e9;
 
         if ((contador_atendimentos == total_clientes) || (elapsed_time) > 5.0)
         {
