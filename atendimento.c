@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
@@ -155,6 +156,15 @@ void *thread_menu(void *arg)
     printf("Pressione 's' para encerrar o programa.\n");
     while ((ch = getchar()) != 's')
         ;
+    FILE *lng = fopen("lista_numeros_gerados.txt", "r");
+    char linha[256];
+    if (lng != NULL)
+    {
+        while (fgets(linha, sizeof(linha), lng))
+        {
+            printf("PID: %s", linha); // Imprime a linha
+        }
+    }
     printf("Encerrando o programa...\n");
     flag_parar = 1;
     return NULL;
@@ -357,11 +367,23 @@ void *thread_atendente(void *arg)
         pthread_mutex_unlock(&file_mutex);
 
         sem_post(sem_atend);
-
+        struct stat st;
         if (++contador_atendimentos % 10 == 0)
+        {
             system("./analista &");
+        }
+        else if (stat("arquivo.txt", &st) == 0)
+        { // Obtém informações sobre o arquivo
+            if (st.st_size == 0)
+            {
+                continue;
+            }
+            else
+            {
+                system("./analista &");
+            }
+        }
     }
-
     return NULL;
 }
 
@@ -421,10 +443,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    float satisfeitos_porcentagem = clientes_satisfeitos / total_clientes * 100;
+    double satisfeitos_porcentagem = (double)clientes_satisfeitos / total_clientes * 100;
 
     printf("Programa finalizado. Clientes satisfeitos: %d/%d\n", clientes_satisfeitos, total_clientes);
     printf("Taxa de Satisfação: %.2f%%.\n", satisfeitos_porcentagem);
     printf("Tempo de execução: %f segundos\n", elapsed_time);
+
     return 0;
 }

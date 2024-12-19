@@ -49,8 +49,6 @@ int main()
         count++;
     }
 
-    // count = 0; // precisa?
-
     // Copy remaining PIDs to temporary file
     while (fscanf(lng, "%d", &pid) == 1)
     {
