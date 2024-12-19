@@ -54,6 +54,11 @@ int contador_atendimentos = 0;
 struct timespec start_time, end_time;
 double elapsed_time;
 
+// Mutex para proteger o acesso ao arquivo
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+// Mutex para proteger a fila (NÃO FUNCIONA)
+// pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // Function prototypes
 void initLista(ListaCircular *lista);
 int isEmpty(ListaCircular *lista);
@@ -317,23 +322,39 @@ void *thread_atendente(void *arg)
 
         int paciencia = (cliente.prioridade == 1) ? (X / 2) : X;
 
-        if (tempo_espera <= paciencia)
+        if (cliente.prioridade == 1)
         {
-            clientes_satisfeitos++;
+            printf("Atendendo cliente. PID: %d, Prioridade: Alta. \n", cliente.pid);
         }
-
-        printf("Atendendo cliente. PID: %d, Prioridade: %d\n", cliente.pid, cliente.prioridade);
-
-        FILE *lng = fopen("lista_numeros_gerados.txt", "a");
-        if (lng && tempo_espera <= paciencia)
+        else if (cliente.prioridade == 0)
         {
-            fprintf(lng, "%d - Satisfeito\n", cliente.pid);
+            printf("Atendendo cliente. PID: %d, Prioridade: Baixa. \n", cliente.pid);
         }
         else
         {
-            fprintf(lng, "%d - Insatisfeito\n", cliente.pid);
+            printf("Atendendo cliente. PID: %d, Prioridade: ?. \n", cliente.pid);
         }
-        fclose(lng);
+
+        pthread_mutex_lock(&file_mutex);
+        FILE *lng = fopen("lista_numeros_gerados.txt", "a");
+        if (lng)
+        {
+            if (tempo_espera <= paciencia)
+            {
+                fprintf(lng, "%d - Satisfeito\n", cliente.pid);
+                clientes_satisfeitos++;
+            }
+            else
+            {
+                fprintf(lng, "%d - Insatisfeito\n", cliente.pid);
+            }
+            fclose(lng);
+        }
+        else
+        {
+            perror("Erro ao abrir o arquivo de saída");
+        }
+        pthread_mutex_unlock(&file_mutex);
 
         sem_post(sem_atend);
 
@@ -400,7 +421,10 @@ int main(int argc, char *argv[])
         }
     }
 
+    float satisfeitos_porcentagem = clientes_satisfeitos / total_clientes * 100;
+
     printf("Programa finalizado. Clientes satisfeitos: %d/%d\n", clientes_satisfeitos, total_clientes);
+    printf("Taxa de Satisfação: %.2f%%.\n", satisfeitos_porcentagem);
     printf("Tempo de execução: %f segundos\n", elapsed_time);
     return 0;
 }
