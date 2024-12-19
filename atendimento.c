@@ -19,6 +19,10 @@
 #define CLOCK_REALTIME 0
 #endif
 
+#define PRIORIDADE_ALTA 1
+#define PRIORIDADE_BAIXA 0
+#define TEMPO_ESPERA_BASE 50000 // 50ms base para espera
+
 #define MAX_FILA 100
 #define MAX_TENTATIVAS 5
 
@@ -156,15 +160,25 @@ void *thread_menu(void *arg)
     printf("Pressione 's' para encerrar o programa.\n");
     while ((ch = getchar()) != 's')
         ;
+
+    // Chamar o analista uma última vez para garantir a leitura de todos os PIDs restantes
+    sem_wait(sem_block); // Adicionando semáforo para garantir acesso seguro
+
     FILE *lng = fopen("lista_numeros_gerados.txt", "r");
     char linha[256];
+
     if (lng != NULL)
     {
+        printf("\nImprimindo PIDs restantes:\n");
         while (fgets(linha, sizeof(linha), lng))
         {
             printf("PID: %s", linha); // Imprime a linha
         }
+        fclose(lng);
     }
+
+    sem_post(sem_block); // Liberando o semáforo
+
     printf("Encerrando o programa...\n");
     flag_parar = 1;
     return NULL;
@@ -196,16 +210,22 @@ void *thread_recepcao(void *arg)
     int clientes_gerados = 0;
     srand(time(NULL));
 
+    // Controle de taxa de geração de clientes prioritários
+    int taxa_prioritarios = 0;
+
     while (!flag_parar)
     {
         if (fila.size >= MAX_FILA)
         {
-            usleep(100000);
+            usleep(TEMPO_ESPERA_BASE);
             continue;
         }
 
         if (N != 0 && clientes_gerados >= N)
             break;
+
+        // Ajusta a probabilidade de clientes prioritários
+        int deve_ser_prioritario = (taxa_prioritarios < (clientes_gerados * 0.4)); // 40% prioritários
 
         pid_t pid = fork();
         if (pid < 0)
@@ -221,55 +241,65 @@ void *thread_recepcao(void *arg)
             exit(1);
         }
 
+        usleep(TEMPO_ESPERA_BASE);
         sem_wait(sem_block);
-        if (!verificar_arquivo_demanda(MAX_TENTATIVAS))
-        {
-            perror("Falha em acessar arquivo de demanda");
-            kill(pid, SIGKILL);
-            sem_post(sem_block);
-            continue;
-        }
 
-        FILE *demanda = fopen("demanda.txt", "r");
-        if (demanda == NULL)
-        {
-            perror("Falha ao abrir arquivo de demanda");
-            kill(pid, SIGKILL);
-            sem_post(sem_block);
-            continue;
-        }
-
+        // Leitura do tempo de atendimento com retry
         int tempo_atendimento = 0;
-        if (fscanf(demanda, "%d", &tempo_atendimento) != 1)
+        int leitura_sucesso = 0;
+        int tentativas = 0;
+
+        while (tentativas < MAX_TENTATIVAS && !leitura_sucesso)
         {
-            perror("Falha ao ler tempo de atendimento");
-            fclose(demanda);
+            FILE *demanda = fopen("demanda.txt", "r");
+            if (demanda != NULL)
+            {
+                if (fscanf(demanda, "%d", &tempo_atendimento) == 1)
+                {
+                    leitura_sucesso = 1;
+                }
+                fclose(demanda);
+            }
+            if (!leitura_sucesso)
+            {
+                usleep(TEMPO_ESPERA_BASE / 5);
+                tentativas++;
+            }
+        }
+
+        if (!leitura_sucesso)
+        {
             kill(pid, SIGKILL);
             sem_post(sem_block);
             continue;
         }
-        fclose(demanda);
 
         struct timeval current;
         gettimeofday(&current, NULL);
         int hora_chegada = (current.tv_sec - tempo_inicial.tv_sec) * 1000 +
                            (current.tv_usec - tempo_inicial.tv_usec) / 1000;
 
+        int prioridade = deve_ser_prioritario ? PRIORIDADE_ALTA : PRIORIDADE_BAIXA;
+        if (prioridade == PRIORIDADE_ALTA)
+            taxa_prioritarios++;
+
         Cliente novo_cliente = {
             .pid = pid,
             .hora_chegada = hora_chegada,
-            .prioridade = (rand() % 2 == 0) ? 1 : 0,
+            .prioridade = prioridade,
             .tempo_atendimento = tempo_atendimento};
 
         enqueue(&fila, novo_cliente);
         total_clientes++;
 
-        printf("Cliente gerado. PID: %d\n", pid);
+        printf("Cliente gerado. PID: %d, Prioridade: %s\n",
+               pid, prioridade == PRIORIDADE_ALTA ? "Alta" : "Baixa");
 
         sem_post(sem_block);
         clientes_gerados++;
 
-        usleep(50000);
+        // Ajusta o tempo de espera baseado no tamanho da fila
+        usleep(TEMPO_ESPERA_BASE * (1 + (fila.size / 10)));
     }
 
     return NULL;
@@ -288,7 +318,7 @@ void *thread_atendente(void *arg)
         if (isEmpty(&fila))
         {
             sem_post(sem_block);
-            usleep(100000);
+            usleep(TEMPO_ESPERA_BASE);
             continue;
         }
 
@@ -328,28 +358,32 @@ void *thread_atendente(void *arg)
 
         gettimeofday(&current, NULL);
         int tempo_espera = (current.tv_sec - tempo_inicial.tv_sec) * 1000 +
-                           (current.tv_usec - tempo_inicial.tv_usec) / 1000 - cliente.hora_chegada;
+                           (current.tv_usec - tempo_inicial.tv_usec) / 1000 -
+                           cliente.hora_chegada;
 
+        // Cliente prioritário tem metade da paciência (50%)
         int paciencia = (cliente.prioridade == 1) ? (X / 2) : X;
 
+        // Verifica satisfação baseada estritamente no tempo de espera vs paciência
+        int cliente_satisfeito = (tempo_espera <= paciencia);
+
+        // Log do atendimento com informações detalhadas
         if (cliente.prioridade == 1)
         {
-            printf("Atendendo cliente. PID: %d, Prioridade: Alta. \n", cliente.pid);
-        }
-        else if (cliente.prioridade == 0)
-        {
-            printf("Atendendo cliente. PID: %d, Prioridade: Baixa. \n", cliente.pid);
+            printf("Atendendo cliente prioritário. PID: %d, Tempo espera: %d ms, Paciência: %d ms\n",
+                   cliente.pid, tempo_espera, paciencia);
         }
         else
         {
-            printf("Atendendo cliente. PID: %d, Prioridade: ?. \n", cliente.pid);
+            printf("Atendendo cliente normal. PID: %d, Tempo espera: %d ms, Paciência: %d ms\n",
+                   cliente.pid, tempo_espera, paciencia);
         }
 
         pthread_mutex_lock(&file_mutex);
         FILE *lng = fopen("lista_numeros_gerados.txt", "a");
         if (lng)
         {
-            if (tempo_espera <= paciencia)
+            if (cliente_satisfeito)
             {
                 fprintf(lng, "%d - Satisfeito\n", cliente.pid);
                 clientes_satisfeitos++;
@@ -367,13 +401,15 @@ void *thread_atendente(void *arg)
         pthread_mutex_unlock(&file_mutex);
 
         sem_post(sem_atend);
+
+        // Controle de análise a cada 10 atendimentos
         struct stat st;
         if (++contador_atendimentos % 10 == 0)
         {
             system("./analista &");
         }
         else if (stat("arquivo.txt", &st) == 0)
-        { // Obtém informações sobre o arquivo
+        {
             if (st.st_size == 0)
             {
                 continue;
@@ -383,6 +419,9 @@ void *thread_atendente(void *arg)
                 system("./analista &");
             }
         }
+
+        // Pequena pausa entre atendimentos
+        usleep(TEMPO_ESPERA_BASE / 2);
     }
     return NULL;
 }
