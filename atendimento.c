@@ -13,10 +13,15 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
 #endif
+
+#define PRIORIDADE_ALTA 1
+#define PRIORIDADE_BAIXA 0
+#define TEMPO_ESPERA_BASE 50000 // 50ms base para espera
 
 #define MAX_FILA 100
 #define MAX_TENTATIVAS 5
@@ -47,9 +52,17 @@ sem_t *sem_atend = SEM_FAILED;
 sem_t *sem_block = SEM_FAILED;
 ListaCircular fila;
 int total_clientes = 0, clientes_satisfeitos = 0;
-struct timeval tempo_inicial;
+struct timeval tempo_inicial, tempo_atual;
 int flag_parar = 0;
 int contador_atendimentos = 0;
+
+struct timespec start_time, end_time;
+double elapsed_time;
+
+// Mutex para proteger o acesso ao arquivo
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+// Mutex para proteger a fila (NÃO FUNCIONA)
+// pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Function prototypes
 void initLista(ListaCircular *lista);
@@ -144,8 +157,29 @@ void handle_signal(int sig)
 void *thread_menu(void *arg)
 {
     char ch;
+    printf("Pressione 's' para encerrar o programa.\n");
     while ((ch = getchar()) != 's')
         ;
+
+    // Chamar o analista uma última vez para garantir a leitura de todos os PIDs restantes
+    sem_wait(sem_block); // Adicionando semáforo para garantir acesso seguro
+
+    FILE *lng = fopen("lista_numeros_gerados.txt", "r");
+    char linha[256];
+
+    if (lng != NULL)
+    {
+        printf("\nImprimindo PIDs restantes:\n");
+        while (fgets(linha, sizeof(linha), lng))
+        {
+            printf("PID: %s", linha); // Imprime a linha
+        }
+        fclose(lng);
+    }
+
+    sem_post(sem_block); // Liberando o semáforo
+
+    printf("Encerrando o programa...\n");
     flag_parar = 1;
     return NULL;
 }
@@ -176,16 +210,22 @@ void *thread_recepcao(void *arg)
     int clientes_gerados = 0;
     srand(time(NULL));
 
+    // Controle de taxa de geração de clientes prioritários
+    int taxa_prioritarios = 0;
+
     while (!flag_parar)
     {
         if (fila.size >= MAX_FILA)
         {
-            usleep(100000);
+            usleep(TEMPO_ESPERA_BASE);
             continue;
         }
 
         if (N != 0 && clientes_gerados >= N)
             break;
+
+        // Ajusta a probabilidade de clientes prioritários
+        int deve_ser_prioritario = (taxa_prioritarios < (clientes_gerados * 0.4)); // 40% prioritários
 
         pid_t pid = fork();
         if (pid < 0)
@@ -201,55 +241,65 @@ void *thread_recepcao(void *arg)
             exit(1);
         }
 
+        usleep(TEMPO_ESPERA_BASE);
         sem_wait(sem_block);
-        if (!verificar_arquivo_demanda(MAX_TENTATIVAS))
-        {
-            perror("Falha em acessar arquivo de demanda");
-            kill(pid, SIGKILL);
-            sem_post(sem_block);
-            continue;
-        }
 
-        FILE *demanda = fopen("demanda.txt", "r");
-        if (demanda == NULL)
-        {
-            perror("Falha ao abrir arquivo de demanda");
-            kill(pid, SIGKILL);
-            sem_post(sem_block);
-            continue;
-        }
-
+        // Leitura do tempo de atendimento com retry
         int tempo_atendimento = 0;
-        if (fscanf(demanda, "%d", &tempo_atendimento) != 1)
+        int leitura_sucesso = 0;
+        int tentativas = 0;
+
+        while (tentativas < MAX_TENTATIVAS && !leitura_sucesso)
         {
-            perror("Falha ao ler tempo de atendimento");
-            fclose(demanda);
+            FILE *demanda = fopen("demanda.txt", "r");
+            if (demanda != NULL)
+            {
+                if (fscanf(demanda, "%d", &tempo_atendimento) == 1)
+                {
+                    leitura_sucesso = 1;
+                }
+                fclose(demanda);
+            }
+            if (!leitura_sucesso)
+            {
+                usleep(TEMPO_ESPERA_BASE / 5);
+                tentativas++;
+            }
+        }
+
+        if (!leitura_sucesso)
+        {
             kill(pid, SIGKILL);
             sem_post(sem_block);
             continue;
         }
-        fclose(demanda);
 
         struct timeval current;
         gettimeofday(&current, NULL);
         int hora_chegada = (current.tv_sec - tempo_inicial.tv_sec) * 1000 +
                            (current.tv_usec - tempo_inicial.tv_usec) / 1000;
 
+        int prioridade = deve_ser_prioritario ? PRIORIDADE_ALTA : PRIORIDADE_BAIXA;
+        if (prioridade == PRIORIDADE_ALTA)
+            taxa_prioritarios++;
+
         Cliente novo_cliente = {
             .pid = pid,
             .hora_chegada = hora_chegada,
-            .prioridade = (rand() % 2 == 0) ? 1 : 0,
+            .prioridade = prioridade,
             .tempo_atendimento = tempo_atendimento};
 
         enqueue(&fila, novo_cliente);
         total_clientes++;
-        printf("Cliente gerado. PID: %d\n", pid);
-        printf("[DEBUG] Fila - tamanho: %d\n", fila.size);
+
+        printf("Cliente gerado. PID: %d, Prioridade: %s\n",
+               pid, prioridade == PRIORIDADE_ALTA ? "Alta" : "Baixa");
 
         sem_post(sem_block);
         clientes_gerados++;
 
-        usleep(50000);
+        // Ajusta o tempo de espera baseado no tamanho da fila
+        usleep(TEMPO_ESPERA_BASE * (1 + (fila.size / 10)));
     }
 
     return NULL;
@@ -268,7 +318,7 @@ void *thread_atendente(void *arg)
         if (isEmpty(&fila))
         {
             sem_post(sem_block);
-            usleep(100000);
+            usleep(TEMPO_ESPERA_BASE);
             continue;
         }
 
@@ -308,34 +358,78 @@ void *thread_atendente(void *arg)
 
         gettimeofday(&current, NULL);
         int tempo_espera = (current.tv_sec - tempo_inicial.tv_sec) * 1000 +
-                           (current.tv_usec - tempo_inicial.tv_usec) / 1000 - cliente.hora_chegada;
+                           (current.tv_usec - tempo_inicial.tv_usec) / 1000 -
+                           cliente.hora_chegada;
 
+        // Cliente prioritário tem metade da paciência (50%)
         int paciencia = (cliente.prioridade == 1) ? (X / 2) : X;
 
-        if (tempo_espera <= paciencia)
-            clientes_satisfeitos++;
+        // Verifica satisfação baseada estritamente no tempo de espera vs paciência
+        int cliente_satisfeito = (tempo_espera <= paciencia);
 
-        printf("Atendendo cliente. PID: %d, Prioridade: %d\n", cliente.pid, cliente.prioridade);
+        // Log do atendimento com informações detalhadas
+        if (cliente.prioridade == 1)
+        {
+            printf("Atendendo cliente prioritário. PID: %d, Tempo espera: %d ms, Paciência: %d ms\n",
+                   cliente.pid, tempo_espera, paciencia);
+        }
+        else
+        {
+            printf("Atendendo cliente normal. PID: %d, Tempo espera: %d ms, Paciência: %d ms\n",
+                   cliente.pid, tempo_espera, paciencia);
+        }
 
+        pthread_mutex_lock(&file_mutex);
         FILE *lng = fopen("lista_numeros_gerados.txt", "a");
         if (lng)
         {
-            fprintf(lng, "%d\n", cliente.pid);
+            if (cliente_satisfeito)
+            {
+                fprintf(lng, "%d - Satisfeito\n", cliente.pid);
+                clientes_satisfeitos++;
+            }
+            else
+            {
+                fprintf(lng, "%d - Insatisfeito\n", cliente.pid);
+            }
             fclose(lng);
         }
+        else
+        {
+            perror("Erro ao abrir o arquivo de saída");
+        }
+        pthread_mutex_unlock(&file_mutex);
 
         sem_post(sem_atend);
 
+        // Controle de análise a cada 10 atendimentos
+        struct stat st;
         if (++contador_atendimentos % 10 == 0)
+        {
             system("./analista &");
-    }
+        }
+        else if (stat("arquivo.txt", &st) == 0)
+        {
+            if (st.st_size == 0)
+            {
+                continue;
+            }
+            else
+            {
+                system("./analista &");
+            }
+        }
 
+        // Pequena pausa entre atendimentos
+        usleep(TEMPO_ESPERA_BASE / 2);
+    }
     return NULL;
 }
 
 // Main function
 int main(int argc, char *argv[])
 {
+    double elapsed_time = 0;
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
@@ -352,30 +446,47 @@ int main(int argc, char *argv[])
 
     int N = atoi(argv[1]);
     int X = atoi(argv[2]);
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
 
-    sem_atend = sem_open("/sem_atend", O_CREAT | O_EXCL, 0644, 1);
-    sem_block = sem_open("/sem_block", O_CREAT | O_EXCL, 0644, 1);
-    if (sem_atend == SEM_FAILED || sem_block == SEM_FAILED)
+    while (!flag_parar && elapsed_time < 5)
     {
-        perror("Falha ao criar semáforos");
-        return 1;
+        sem_atend = sem_open("/sem_atend", O_CREAT | O_EXCL, 0644, 1);
+        sem_block = sem_open("/sem_block", O_CREAT | O_EXCL, 0644, 1);
+        if (sem_atend == SEM_FAILED || sem_block == SEM_FAILED)
+        {
+            perror("Falha ao criar semáforos");
+            return 1;
+        }
+
+        initLista(&fila);
+
+        pthread_t thread_rec, thread_atend, thread_menu_t;
+        pthread_create(&thread_rec, NULL, thread_recepcao, &N);
+        pthread_create(&thread_atend, NULL, thread_atendente, &X);
+        pthread_create(&thread_menu_t, NULL, thread_menu, NULL);
+
+        pthread_join(thread_rec, NULL);
+        pthread_join(thread_atend, NULL);
+        pthread_join(thread_menu_t, NULL);
+
+        safe_sem_close(&sem_atend, "/sem_atend");
+        safe_sem_close(&sem_block, "/sem_block");
+
+        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        elapsed_time = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
+
+        if ((contador_atendimentos == total_clientes) || (elapsed_time) > 5.0)
+        {
+            flag_parar = 1;
+            break;
+        }
     }
 
-    initLista(&fila);
-    gettimeofday(&tempo_inicial, NULL);
-
-    pthread_t thread_rec, thread_atend, thread_menu_t;
-    pthread_create(&thread_rec, NULL, thread_recepcao, &N);
-    pthread_create(&thread_atend, NULL, thread_atendente, &X);
-    pthread_create(&thread_menu_t, NULL, thread_menu, NULL);
-
-    pthread_join(thread_rec, NULL);
-    pthread_join(thread_atend, NULL);
-    pthread_join(thread_menu_t, NULL);
-
-    safe_sem_close(&sem_atend, "/sem_atend");
-    safe_sem_close(&sem_block, "/sem_block");
+    double satisfeitos_porcentagem = (double)clientes_satisfeitos / total_clientes * 100;
 
     printf("Programa finalizado. Clientes satisfeitos: %d/%d\n", clientes_satisfeitos, total_clientes);
+    printf("Taxa de Satisfação: %.2f%%.\n", satisfeitos_porcentagem);
+    printf("Tempo de execução: %f segundos\n", elapsed_time);
+
     return 0;
 }

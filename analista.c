@@ -2,6 +2,8 @@
 #include <semaphore.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <unistd.h>
+#include <string.h>
 
 int main()
 {
@@ -36,20 +38,29 @@ int main()
     }
 
     int count = 0;
-    int pid;
     printf("Analista imprimindo PIDs:\n");
+    char linha[256]; // Buffer para armazenar cada linha do arquivo
 
     // Print first 10 PIDs or all if less than 10
-    while (count < 10 && fscanf(lng, "%d", &pid) == 1)
+    while (count < 10 && fgets(linha, sizeof(linha), lng))
     {
-        printf("PID %d\n", pid);
+        // Remove newline if present
+        linha[strcspn(linha, "\n")] = '\0';
+
+        // Check if the line already has a status
+        if (strstr(linha, " - ") == NULL)
+        {
+            strcat(linha, " - ?");
+        }
+
+        printf("PID: %s\n", linha);
         count++;
     }
 
-    // Copy remaining PIDs to temporary file
-    while (fscanf(lng, "%d", &pid) == 1)
+    // Copy remaining PIDs to temporary file, preserving their full format
+    while (fgets(linha, sizeof(linha), lng))
     {
-        fprintf(temp, "%d\n", pid);
+        fprintf(temp, "%s", linha); // Write the complete line including status
     }
 
     // Close both files
@@ -57,7 +68,6 @@ int main()
     fclose(temp);
 
     // Replace original file with temporary file
-    // This effectively truncates the original file to only contain remaining PIDs
     rename("temp_lista.txt", "lista_numeros_gerados.txt");
 
     // Release the block semaphore
